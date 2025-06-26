@@ -55,6 +55,7 @@
       <button id="start-share" class="btn btn-outline-info">Share My Screen</button>
       <button id="share-gpu" class="btn btn-outline-primary">Share WebGL (GPU)</button>
       <button id="stop-share" class="btn btn-outline-warning" disabled>Stop Sharing</button>
+      <button id="random-peer" class="btn btn-outline-success">Connect to Random Peer</button>
     </div>
     <div class="gpu-info" id="gpu-info"></div>
     <div id="peer-list">
@@ -93,6 +94,7 @@
     const startBtn = document.getElementById("start-share");
     const shareGpuBtn = document.getElementById("share-gpu");
     const stopBtn = document.getElementById("stop-share");
+    const randomPeerBtn = document.getElementById("random-peer");
     const canvas = document.getElementById("webgl-canvas");
     const gpuInfoDiv = document.getElementById("gpu-info");
 
@@ -290,6 +292,29 @@
       if (animId) cancelAnimationFrame(animId);
       if (gl) gl.clear(gl.COLOR_BUFFER_BIT);
     }
+
+    // ========== RANDOM PEER CONNECTION ==========
+    function getAllPeerIdsFromGun(callback) {
+      const peers = [];
+      peerGunSet.map().once(peerId => {
+        if (peerId && peerId !== myPeerId && !connPeers[peerId]) {
+          peers.push(peerId);
+        }
+      });
+      setTimeout(() => callback(peers), 600);
+    }
+    function connectToRandomPeer() {
+      getAllPeerIdsFromGun(peers => {
+        if (peers.length === 0) {
+          setStatus("No peers found to connect.");
+          return;
+        }
+        const randomPeerId = peers[Math.floor(Math.random() * peers.length)];
+        setStatus("Connecting to random peer: " + randomPeerId);
+        window.connectToPeer(randomPeerId);
+      });
+    }
+    randomPeerBtn.onclick = connectToRandomPeer;
 
     // ========== INITIAL ==========
     showNoStream();
