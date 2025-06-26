@@ -27,10 +27,14 @@
     #status { color: #f7e24e; min-height: 20px; text-align: center; margin-bottom: 1em; }
     #webgl-canvas { display: none; }
     .gpu-info { font-size: 1em; color: #39ffc4; margin-top: 0.6em; }
+    #random-viewer-container { display: none; flex-direction: column; align-items: center; margin-top: 2em; }
+    #random-viewer-status { color: #f7e24e; margin-bottom: 0.8em; }
+    #random-viewer-video { width: 100%; max-width: 720px; min-height: 320px; background: #11171d; border: 2px solid #00eaff; border-radius: 12px; margin-bottom: 1rem; }
     @media (max-width: 700px) {
       #stream-container { padding: 1rem 0.4rem; }
       #display-stream { height: 32vw; min-height: 160px; }
       #peer-list { padding: 0.7rem 0.8rem; }
+      #random-viewer-video { min-height: 140px; }
     }
   </style>
 </head>
@@ -55,12 +59,18 @@
       <button id="start-share" class="btn btn-outline-info">Share My Screen</button>
       <button id="share-gpu" class="btn btn-outline-primary">Share WebGL (GPU)</button>
       <button id="stop-share" class="btn btn-outline-warning" disabled>Stop Sharing</button>
-      <button id="random-peer" class="btn btn-outline-success">Connect to Random Peer</button>
+      <button id="random-viewer-btn" class="btn btn-success">Watch Random Stream</button>
     </div>
     <div class="gpu-info" id="gpu-info"></div>
     <div id="peer-list">
       <h2>Connected Peers (via GUN)</h2>
       <div id="peer-list-content">No peers found yet.</div>
+    </div>
+    <!-- Embedded random viewer -->
+    <div id="random-viewer-container" class="container">
+      <div id="random-viewer-status"></div>
+      <video id="random-viewer-video" autoplay playsinline controls></video>
+      <button id="random-viewer-close" class="btn btn-outline-danger btn-sm mb-2">Close Viewer</button>
     </div>
   </div>
   <script>
@@ -94,9 +104,16 @@
     const startBtn = document.getElementById("start-share");
     const shareGpuBtn = document.getElementById("share-gpu");
     const stopBtn = document.getElementById("stop-share");
-    const randomPeerBtn = document.getElementById("random-peer");
     const canvas = document.getElementById("webgl-canvas");
     const gpuInfoDiv = document.getElementById("gpu-info");
+    const randomViewerBtn = document.getElementById("random-viewer-btn");
+
+    // Embedded random viewer elements
+    const randomViewerContainer = document.getElementById("random-viewer-container");
+    const randomViewerStatus = document.getElementById("random-viewer-status");
+    const randomViewerVideo = document.getElementById("random-viewer-video");
+    const randomViewerClose = document.getElementById("random-viewer-close");
+    let randomViewerPeer = null;
 
     // ========== GPU INFO ==========
     function getWebGLInfo() {
@@ -138,7 +155,6 @@
     function updatePeerList() {
       peerListDiv.innerHTML = "";
       let found = 0;
-      // List all known Peer IDs from GUN, skip our own
       peerGunSet.map().once(peerId => {
         if (peerId && peerId !== myPeerId) {
           found++;
@@ -155,7 +171,6 @@
     // ========== IPFS ANNOUNCE ==========
     async function startIPFS() {
       ipfs = await window.Ipfs.create();
-      // Subscribe for Peer IDs
       await ipfs.pubsub.subscribe(IPFS_TOPIC, (msg) => {
         const peerId = new TextDecoder().decode(msg.data);
         if (peerId && peerId !== myPeerId) {
@@ -165,7 +180,6 @@
       });
       setStatus("IPFS ready.");
     }
-    // Announce this PeerID via IPFS pubsub
     function announcePeerOnIPFS(peerId) {
       if (ipfs) {
         ipfs.pubsub.publish(IPFS_TOPIC, new TextEncoder().encode(peerId));
@@ -183,7 +197,7 @@
       peerIdDiv.textContent = "Your Peer ID: " + id;
       setStatus("Ready! Waiting for IPFS...");
       showGpuInfoLocal();
-      addPeerToGun(id); // Add self for UI
+      addPeerToGun(id);
       updatePeerList();
       startIPFS().then(() => {
         announcePeerOnIPFS(id);
@@ -213,21 +227,18 @@
       updatePeerList();
     });
 
-    // ========== CONNECT TO PEER ==========
     window.connectToPeer = function(peerId) {
       if (peerId === myPeerId || connPeers[peerId]) return;
       const conn = peer.connect(peerId);
       conn.on("open", () => {
         connPeers[peerId] = {conn};
         updatePeerList();
-        // Send GPU info on connect
         const { renderer, vendor } = getWebGLInfo();
         conn.send({type: "gpu", gpu: `${renderer} (${vendor})`});
       });
       conn.on("data", data => {
         if (data.type === "gpu" && data.gpu) showGpuInfoRemote(data.gpu);
       });
-      // Media connection for stream
       const call = peer.call(peerId, localStream || undefined);
       call.on("stream", stream => {
         showStream(stream, peerId);
@@ -293,34 +304,69 @@
       if (gl) gl.clear(gl.COLOR_BUFFER_BIT);
     }
 
-    // ========== RANDOM PEER CONNECTION ==========
-    function getAllPeerIdsFromGun(callback) {
-      const peers = [];
+    // ========== RANDOM PUBLIC VIEWER ==========
+    randomViewerBtn.onclick = function() {
+      randomViewerStatus.textContent = "Selecting a random stream...";
+      randomViewerVideo.srcObject = null;
+      randomViewerContainer.style.display = "flex";
+      // Get all peer IDs in GUN, pick one at random, and connect
+      let peerIds = [];
       peerGunSet.map().once(peerId => {
-        if (peerId && peerId !== myPeerId && !connPeers[peerId]) {
-          peers.push(peerId);
-        }
+        if (peerId && peerId !== myPeerId) peerIds.push(peerId);
       });
-      setTimeout(() => callback(peers), 600);
-    }
-    function connectToRandomPeer() {
-      getAllPeerIdsFromGun(peers => {
-        if (peers.length === 0) {
-          setStatus("No peers found to connect.");
+      setTimeout(() => {
+        if (!peerIds.length) {
+          randomViewerStatus.textContent = "No streams available right now.";
           return;
         }
-        const randomPeerId = peers[Math.floor(Math.random() * peers.length)];
-        setStatus("Connecting to random peer: " + randomPeerId);
-        window.connectToPeer(randomPeerId);
+        const picked = peerIds[Math.floor(Math.random() * peerIds.length)];
+        randomViewerStatus.textContent = "Connecting to random stream: " + picked;
+        connectRandomViewerToPeer(picked);
+      }, 700); // Wait for GUN .map().once to finish
+    };
+    randomViewerClose.onclick = function() {
+      randomViewerContainer.style.display = "none";
+      if (randomViewerPeer) {
+        randomViewerPeer.destroy();
+        randomViewerPeer = null;
+      }
+      randomViewerVideo.srcObject = null;
+      randomViewerStatus.textContent = "";
+    }
+    function connectRandomViewerToPeer(peerId) {
+      if (randomViewerPeer) {
+        randomViewerPeer.destroy();
+        randomViewerPeer = null;
+      }
+      randomViewerPeer = new Peer(undefined, {
+        host: "peerjs.com",
+        port: 443,
+        path: "/",
+        secure: true
+      });
+      randomViewerPeer.on("open", function() {
+        const call = randomViewerPeer.call(peerId, undefined);
+        call.on("stream", function(remoteStream) {
+          randomViewerVideo.srcObject = remoteStream;
+          randomViewerStatus.textContent = "Now watching " + peerId;
+          randomViewerVideo.play();
+        });
+        call.on("close", function() {
+          randomViewerStatus.textContent = "Stream ended.";
+        });
+        call.on("error", function(err) {
+          randomViewerStatus.textContent = "Stream error: " + err;
+        });
+      });
+      randomViewerPeer.on("error", function(err) {
+        randomViewerStatus.textContent = "Viewer Peer error: " + err;
       });
     }
-    randomPeerBtn.onclick = connectToRandomPeer;
 
     // ========== INITIAL ==========
     showNoStream();
     updatePeerList();
     showGpuInfoLocal();
-    // For convenience, refresh peer list every 3 seconds
     setInterval(updatePeerList, 3000);
   </script>
 </body>
